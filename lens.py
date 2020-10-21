@@ -1,0 +1,167 @@
+#
+#
+# A script to allow simple explortation of gravitational lensing
+# of extended objects (i.e., galaxies) by the gravity of a singular
+# isothermal ellipsoid (SIE) potential.
+#
+# Copyright 2009 by Adam S. Bolton
+# Creative Commons Attribution-Noncommercial-ShareAlike 3.0 license applies:
+# http://creativecommons.org/licenses/by-nc-sa/3.0/
+# All redistributions, modified or otherwise, must include this
+# original copyright notice, licensing statement, and disclaimer.
+# DISCLAIMER: ABSOLUTELY NO WARRANTY EXPRESS OR IMPLIED.
+# AUTHOR ASSUMES NO LIABILITY IN CONNECTION WITH THIS COMPUTER CODE.
+#
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import cm
+import json
+
+def xy_rotate(x, y, xcen, ycen, phi):
+    """
+    NAME: xy_rotate
+
+    PURPOSE: Transform input (x, y) coordiantes into the frame of a new
+             (x, y) coordinate system that has its origin at the point
+             (xcen, ycen) in the old system, and whose x-axis is rotated
+             c.c.w. by phi degrees with respect to the original x axis.
+
+    USAGE: (xnew,ynew) = xy_rotate(x, y, xcen, ycen, phi)
+
+    ARGUMENTS:
+      x, y: numpy ndarrays with (hopefully) matching sizes
+            giving coordinates in the old system
+      xcen: old-system x coordinate of the new origin
+      ycen: old-system y coordinate of the new origin
+      phi: angle c.c.w. in degrees from old x to new x axis
+
+    RETURNS: 2-item tuple containing new x and y coordinate arrays
+
+    WRITTEN: Adam S. Bolton, U. of Utah, 2009
+    """
+    phirad = np.deg2rad(phi)
+    xnew = (x - xcen) * np.cos(phirad) + (y - ycen) * np.sin(phirad)
+    ynew = (y - ycen) * np.cos(phirad) - (x - xcen) * np.sin(phirad)
+    return (xnew,ynew)
+
+def gauss_2d(x, y, par):
+    """
+    NAME: gauss_2d
+
+    PURPOSE: Implement 2D Gaussian function
+
+    USAGE: z = gauss_2d(x, y, par)
+
+    ARGUMENTS:
+      x, y: vecors or images of coordinates;
+            should be matching numpy ndarrays
+      par: vector of parameters, defined as follows:
+        par[0]: amplitude
+        par[1]: intermediate-axis sigma
+        par[2]: x-center
+        par[3]: y-center
+        par[4]: axis ratio
+        par[5]: c.c.w. major-axis rotation w.r.t. x-axis
+        
+    RETURNS: 2D Gaussian evaluated at x-y coords
+
+    NOTE: amplitude = 1 is not normalized, but rather has max = 1
+
+    WRITTEN: Adam S. Bolton, U. of Utah, 2009
+    """
+    (xnew,ynew) = xy_rotate(x, y, par[2], par[3], par[5])
+    r_ell_sq = ((xnew**2)*par[4] + (ynew**2)/par[4]) / np.abs(par[1])**2
+    return par[0] * np.exp(-0.5*r_ell_sq)
+
+def sie_grad(x, y, par):
+    """
+    NAME: sie_grad
+
+    PURPOSE: compute the deflection of an SIE potential
+
+    USAGE: (xg, yg) = sie_grad(x, y, par)
+
+    ARGUMENTS:
+      x, y: vectors or images of coordinates;
+            should be matching numpy ndarrays
+      par: vector of parameters with 1 to 5 elements, defined as follows:
+        par[0]: lens strength, or 'Einstein radius'
+        par[1]: (optional) x-center (default = 0.0)
+        par[2]: (optional) y-center (default = 0.0)
+        par[3]: (optional) axis ratio (default=1.0)
+        par[4]: (optional) major axis Position Angle
+                in degrees c.c.w. of x axis. (default = 0.0)
+
+    RETURNS: tuple (xg, yg) of gradients at the positions (x, y)
+
+    NOTES: This routine implements an 'intermediate-axis' conventionp.
+      Analytic forms for the SIE potential can be found in:
+        Kassiola & Kovner 1993, ApJ, 417, 450
+        Kormann et al. 1994, A&A, 284, 285
+        Keeton & Kochanek 1998, ApJ, 495, 157
+      The parameter-order convention in this routine differs from that
+      of a previous IDL routine of the same name by ASB.
+
+    WRITTEN: Adam S. Bolton, U of Utah, 2009
+    """
+    # Set parameters:
+    b = np.abs(par[0]) # can't be negative!!!
+    xzero = 0. if (len(par) < 2) else par[1]
+    yzero = 0. if (len(par) < 3) else par[2]
+    q = 1. if (len(par) < 4) else np.abs(par[3])
+    phiq = 0. if (len(par) < 5) else par[4]
+    eps = 0.001 # for sqrt(1/q - q) < eps, a limit expression is used.
+    # Handle q > 1 gracefully:
+    if (q > 1.):
+        q = 1.0 / q
+        phiq = phiq + 90.0
+    # Go into shifted coordinats of the potential:
+    phirad = np.deg2rad(phiq)
+    xsie = (x-xzero) * np.cos(phirad) + (y-yzero) * np.sin(phirad)
+    ysie = (y-yzero) * np.cos(phirad) - (x-xzero) * np.sin(phirad)
+    # Compute potential gradient in the transformed system:
+    r_ell = np.sqrt(q * xsie**2 + ysie**2 / q)
+    qfact = np.sqrt(1./q - q)
+    # (r_ell == 0) terms prevent divide-by-zero problems
+    if (qfact >= eps):
+        xtg = (b/qfact) * np.arctan(qfact * xsie / (r_ell + (r_ell == 0)))
+        ytg = (b/qfact) * np.arctanh(qfact * ysie / (r_ell + (r_ell == 0)))
+    else:
+        xtg = b * xsie / (r_ell + (r_ell == 0))
+        ytg = b * ysie / (r_ell + (r_ell == 0))
+    # Transform back to un-rotated system:
+    xg = xtg * np.cos(phirad) - ytg * np.sin(phirad)
+    yg = ytg * np.cos(phirad) + xtg * np.sin(phirad)
+    # Return value:
+    return (xg, yg)
+
+if __name__ == "__main__":
+  plt.rcParams["axes.facecolor"] = "black"
+  # Make some x and y coordinate images:
+  nx = 501
+  ny = 501
+  xhilo = [-2.5, 2.5]
+  yhilo = [-2.5, 2.5]
+  x = (xhilo[1] - xhilo[0]) * np.outer(np.ones(ny), np.arange(nx)) / float(nx-1) + xhilo[0]
+  y = (yhilo[1] - yhilo[0]) * np.outer(np.arange(ny), np.ones(nx)) / float(ny-1) + yhilo[0]
+  # Set some Gaussian blob image parameters and pack them into an array:
+  g_amp = 1.0   # peak brightness value
+  g_sig = 0.075  # Gaussian "sigma" (i.e., size)
+  g_xcen = 0.0  # x position of center
+  g_ycen = 0.0  # y position of center
+  g_axrat = 1.0 # minor-to-major axis ratio
+  g_pa = 30    # major-axis position angle (degrees) c.c.w. from x axis
+  gpar = np.asarray([g_amp, g_sig, g_xcen, g_ycen, g_axrat, g_pa])
+  g_image = gauss_2d(x, y, gpar)
+
+  feed = {}
+  with open("/golem/work/params.json", "r") as file:
+    feed = json.load(file)
+  start_frame = feed["start_frame"]
+  lpar = np.asarray([1.5, 0.0, 0.0, 0.001, 0.0])
+  for i in range(len(feed["points"])):
+    lpar[3] = feed["points"][i]
+    (xg, yg) = sie_grad(x, y, lpar)
+    g_lensimage = gauss_2d(x-xg, y-yg, gpar)
+    plt.imsave(f"/golem/output/{start_frame + i}.png", g_lensimage, origin = "lower", cmap = cm.inferno)
